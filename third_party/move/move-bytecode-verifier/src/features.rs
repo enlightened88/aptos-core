@@ -8,7 +8,9 @@ use crate::VerifierConfig;
 use move_binary_format::{
     binary_views::BinaryIndexedView,
     errors::{Location, PartialVMError, PartialVMResult, VMResult},
-    file_format::{CompiledModule, CompiledScript, StructFieldInformation},
+    file_format::{
+        Bytecode, CompiledModule, CompiledScript, SignatureToken, StructFieldInformation,
+    },
     IndexKind,
 };
 use move_core_types::vm_status::StatusCode;
@@ -32,8 +34,10 @@ impl<'a> FeatureVerifier<'a> {
             config,
             code: BinaryIndexedView::Module(module),
         };
+        verifier.verify_signatures()?;
         verifier.verify_function_handles()?;
-        verifier.verify_struct_defs()
+        verifier.verify_struct_defs()?;
+        verifier.verify_function_defs()
     }
 
     pub fn verify_script(config: &'a VerifierConfig, module: &'a CompiledScript) -> VMResult<()> {
@@ -48,7 +52,9 @@ impl<'a> FeatureVerifier<'a> {
             config,
             code: BinaryIndexedView::Script(script),
         };
-        verifier.verify_function_handles()
+        verifier.verify_signatures()?;
+        verifier.verify_function_handles()?;
+        verifier.verify_function_defs()
     }
 
     fn verify_struct_defs(&self) -> PartialVMResult<()> {
@@ -76,6 +82,45 @@ impl<'a> FeatureVerifier<'a> {
                     return Err(PartialVMError::new(StatusCode::FEATURE_NOT_ENABLED)
                         .at_index(IndexKind::FunctionHandle, idx as u16)
                         .with_message("resource access control feature not enabled".to_string()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn verify_function_defs(&self) -> PartialVMResult<()> {
+        if !self.config.enable_function_values {
+            for (idx, def) in self.code.function_defs().unwrap_or(&[]).iter().enumerate() {
+                if let Some(unit) = &def.code {
+                    for bc in &unit.code {
+                        if matches!(
+                            bc,
+                            Bytecode::PackClosure(..)
+                                | Bytecode::PackClosureGeneric(..)
+                                | Bytecode::CallClosure(..)
+                        ) {
+                            return Err(PartialVMError::new(StatusCode::FEATURE_NOT_ENABLED)
+                                .at_index(IndexKind::FunctionDefinition, idx as u16)
+                                .with_message("function value feature not enabled".to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn verify_signatures(&self) -> PartialVMResult<()> {
+        if !self.config.enable_function_values {
+            for (idx, sig) in self.code.signatures().iter().enumerate() {
+                for tok in &sig.0 {
+                    for t in tok.preorder_traversal() {
+                        if matches!(t, SignatureToken::Function(..)) {
+                            return Err(PartialVMError::new(StatusCode::FEATURE_NOT_ENABLED)
+                                .at_index(IndexKind::Signature, idx as u16)
+                                .with_message("function value feature not enabled".to_string()));
+                        }
+                    }
                 }
             }
         }
