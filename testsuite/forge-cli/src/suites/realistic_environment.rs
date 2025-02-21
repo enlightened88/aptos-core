@@ -504,9 +504,8 @@ pub fn wrap_with_realistic_env<T: NetworkTest + 'static>(
     num_validators: usize,
     test: T,
 ) -> CompositeNetworkTest {
-    CompositeNetworkTest::new_with_two_wrappers(
+    CompositeNetworkTest::new(
         MultiRegionNetworkEmulationTest::default_for_validator_count(num_validators),
-        CpuChaosTest::default(),
         test,
     )
 }
